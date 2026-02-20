@@ -76,7 +76,15 @@ def home():
 @app.post("/fetch")
 def fetch():
     data = request.get_json(silent=True) or {}
-    url = (data.get("url") or "").strip()
+
+    url = (
+        data.get("url")
+        or data.get("URL")
+        or data.get("link")
+        or request.form.get("url")
+        or request.args.get("url")
+        or ""
+    ).strip()
 
     if not url:
         return jsonify({
