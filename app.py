@@ -1,26 +1,41 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import requests
-from bs4 import BeautifulSoup
+from newspaper import Article
+import os
 
 app = Flask(__name__)
-CORS(app)  # allow cross-origin requests (handy for Lovable/browser calls)
+CORS(app)
 
-from newspaper import Article
 
 def fetch_article(url: str) -> dict:
     article = Article(url)
     article.download()
     article.parse()
 
+    # Try to extract metadata
+    publish_date = None
+    if article.publish_date:
+        publish_date = article.publish_date.isoformat()
+
     return {
-        "title": article.title,
-        "content": article.text
+        "original_title": article.title,
+        "original_article": article.text,
+        "authors": article.authors,
+        "publish_date": publish_date,
+        "top_image": article.top_image,
+        "word_count": len(article.text.split())
     }
+
 
 @app.get("/health")
 def health():
     return {"ok": True}
+
+
+@app.get("/")
+def home():
+    return {"status": "Article API live", "endpoints": ["/health", "/fetch"]}
+
 
 @app.post("/fetch")
 def fetch():
@@ -28,21 +43,24 @@ def fetch():
     url = (data.get("url") or "").strip()
 
     if not url:
-        return jsonify({"error": "Missing 'url' in JSON body"}), 400
+        return jsonify({
+            "status": "error",
+            "message": "Missing 'url' in JSON body"
+        }), 400
 
     try:
         result = fetch_article(url)
-        return jsonify(result)
-    except requests.exceptions.RequestException as e:
-        return jsonify({"error": f"Fetch failed: {str(e)}"}), 502
-    except Exception as e:
-        return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
-    
-@app.get("/")
-def home():
-    return {"message": "Article API running. Use /health or POST /fetch"}
+        return jsonify({
+            "status": "success",
+            "data": result
+        })
 
-import os
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
