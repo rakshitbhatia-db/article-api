@@ -1,104 +1,63 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from newspaper import Article
-from readability import Document
-from bs4 import BeautifulSoup
 import requests
 import os
+import trafilatura
 
 app = Flask(__name__)
 CORS(app)
 
+WEBSCRAPING_ENDPOINT = "https://api.webscrapingapi.com/v2"
+API_KEY = "AeJXjrVSxOlt6Oc0to63Ok4DK2AQrlPy"
 
-def extract_with_newspaper(url: str):
-    article = Article(url)
-    article.download()
-    article.parse()
 
-    content = article.text.strip()
-    if len(content.split()) < 300:
-        return None
+def fetch_html_via_webscrapingapi(url: str) -> str:
+    if not API_KEY:
+        raise Exception("Missing WEBSCRAPINGAPI_KEY environment variable")
 
-    publish_date = None
-    if article.publish_date:
-        publish_date = article.publish_date.isoformat()
-
-    return {
-        "original_title": article.title,
-        "original_article": content,
-        "authors": article.authors,
-        "publish_date": publish_date,
-        "top_image": article.top_image,
-        "word_count": len(content.split()),
-        "extraction_method": "newspaper3k"
+    params = {
+        "api_key": API_KEY,
+        "url": url,
+        "render_js": "1"
     }
 
+    response = requests.get(WEBSCRAPING_ENDPOINT, params=params, timeout=60)
+    response.raise_for_status()
+    return response.text
 
-def extract_with_readability(url: str):
-    headers = {"User-Agent": "Mozilla/5.0"}
-    response = requests.get(url, headers=headers, timeout=10)
 
-    doc = Document(response.text)
-    html = doc.summary()
+def extract_article_from_html(html: str):
+    extracted_text = trafilatura.extract(
+        html,
+        include_comments=False,
+        include_tables=False,
+        favor_recall=True
+    )
 
-    soup = BeautifulSoup(html, "html.parser")
-    paragraphs = soup.find_all("p")
-    content = "\n\n".join(p.get_text(strip=True) for p in paragraphs)
-
-    if len(content.split()) < 300:
+    if not extracted_text:
         return None
 
-    return {
-        "original_title": doc.title(),
-        "original_article": content,
-        "authors": [],
-        "publish_date": None,
-        "top_image": None,
-        "word_count": len(content.split()),
-        "extraction_method": "readability"
-    }
-
-
-def extract_generic(url: str):
-    headers = {"User-Agent": "Mozilla/5.0"}
-    response = requests.get(url, headers=headers, timeout=10)
-
-    soup = BeautifulSoup(response.text, "html.parser")
-    paragraphs = soup.find_all("p")
-    content = "\n\n".join(p.get_text(strip=True) for p in paragraphs)
-
-    title = soup.title.string if soup.title else ""
+    metadata = trafilatura.extract_metadata(html)
 
     return {
-        "original_title": title,
-        "original_article": content,
-        "authors": [],
-        "publish_date": None,
-        "top_image": None,
-        "word_count": len(content.split()),
-        "extraction_method": "generic_dom"
+        "original_title": metadata.title if metadata else "",
+        "original_article": extracted_text,
+        "authors": metadata.author if metadata and metadata.author else "",
+        "publish_date": metadata.date if metadata and metadata.date else "",
+        "top_image": metadata.image if metadata and metadata.image else "",
+        "word_count": len(extracted_text.split()),
+        "extraction_method": "webscrapingapi_trafilatura"
     }
 
 
 def fetch_article(url: str):
-    # Strategy 1: newspaper3k
-    try:
-        result = extract_with_newspaper(url)
-        if result:
-            return result
-    except Exception:
-        pass
+    html = fetch_html_via_webscrapingapi(url)
+    result = extract_article_from_html(html)
 
-    # Strategy 2: Readability
-    try:
-        result = extract_with_readability(url)
-        if result:
-            return result
-    except Exception:
-        pass
+    if not result:
+        raise Exception("Article extraction failed")
 
-    # Strategy 3: Generic fallback
-    return extract_generic(url)
+    return result
 
 
 @app.get("/health")
